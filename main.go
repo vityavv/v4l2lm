@@ -14,10 +14,10 @@ import (
 
 func main() {
 	//modprobe this bitch
-	cmd := exec.Command("sudo", "-S", "modprobe", "v4l2loopback", "video_nr=63", "card_label=\"V4L2LM Virtual Camera\"")
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	err := cmd.Run()
+	v4l2Enable := exec.Command("sudo", "-S", "modprobe", "v4l2loopback", "video_nr=63", "card_label=\"V4L2LM Virtual Camera\"")
+	v4l2Enable.Stderr = os.Stderr
+	v4l2Enable.Stdin = os.Stdin
+	err := v4l2Enable.Run()
 	if err != nil {
 		log.Fatal("Error starting v4l2loopback: ", err.Error())
 	}
@@ -94,7 +94,10 @@ func main() {
 			//set the size manually because it crashes reading from it if the size of the webcam is constantly changing
 			ffmpegCommand = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "-vcodec", "rawvideo", "-pix_fmt", "yuv420p", "/dev/video63")
 		} else {
-			log.Fatal("You chose something that isn't an image or a video")
+			dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You chose something that isn't an image or a video!")
+			dialog.Run()
+			dialog.Destroy()
+			return
 		}
 		ffmpegCommand.Stderr = os.Stderr
 		ffmpegCommand.Stdout = os.Stdout

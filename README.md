@@ -26,14 +26,13 @@ After you've chosen an image or video to stream, you may open up your consumer (
 
 Here are some things that happen that I don't want happening in the near future.
 
-- The program will crash if something that isn't audio or video is chosen. Make it gentler
-	- Perhaps filter out certain file extensions
 - Everything is in 1024x768.
 	- Make it so that the user can customize the resolution
 	- Make it so that the user can change how the image is cropped/stretched to fill the resolution
 - The program has to be run in the command line to enable v4l2loopback
 - Make releases/prebuilt binaries so users don't have to install all of the dependencies
 - Windows/Mac support (very far future unless someone else wants to do it haha)
+- Perhaps filter out certain file extensions
 
 ## Need help?
 
