@@ -14,6 +14,7 @@ import (
 
 func main() {
 	//modprobe this bitch
+	//TODO check if video driver exists
 	v4l2Enable := exec.Command("sudo", "-S", "modprobe", "v4l2loopback", "video_nr=63", "card_label=\"V4L2LM Virtual Camera\"")
 	v4l2Enable.Stderr = os.Stderr
 	v4l2Enable.Stdin = os.Stdin
@@ -67,19 +68,24 @@ func main() {
 	selection, err := treeView.GetSelection()
 	selection.Connect("changed", func(sel *gtk.TreeSelection) {
 		//So much of this stuff seems unnecessary. Next time I should use something that isn't as complicated as gtk
-		model, iter, ok := sel.GetSelected()
+		_, iter, ok := sel.GetSelected()
 		if !ok {
-			log.Fatal("Get selected returned not ok, I guess? Here's the model and iter: ", model, iter)
+			//Sometimes it gets to an iter that doesn't exist
+			//because the list has already changed
+			//So we don't crash, we just report it, and hope that nothing bad has happened
+			log.Println("Get selected returned not ok. This is probably because you switched folders, and can be ignored.")
+			return
 		}
 		value, err := listStore.GetValue(iter, 0)
 		videoFilename, err := value.GetString()
 		if err != nil {
 			log.Fatal("Couldn't get value out of list store with that iter: ", err.Error())
 		}
-		//Stop current command
-		if started {
-			stdin.Write([]byte("q\n"))
-			<-running
+		_, err = os.Stat(fileChooserButton.GetFilename() + "/" + videoFilename)
+		if os.IsNotExist(err) {
+			// we ignore files that do not exist but are chosen because the change event fires
+			// when the folder changes, several times (for some reason, "it may occasionally be emitted when nothing has happened" - the documentation)
+			return
 		}
 		//TODO be more gentle with errors
 		fileContents, err := ioutil.ReadFile(fileChooserButton.GetFilename() + "/" + videoFilename)
@@ -87,17 +93,23 @@ func main() {
 			log.Fatal("Couldn't read file contents of file (to determine content type)")
 		}
 		contentType := http.DetectContentType(fileContents)
+		//Stop current command
+		if contentType[:len("video")] != "video" && contentType[:len("image")] != "image" {
+			dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You chose something that isn't an image or a video!")
+			dialog.Run()
+			dialog.Destroy()
+			return
+		}
+		if started {
+			stdin.Write([]byte("q\n"))
+			<-running
+		}
 		if contentType[:len("video")] == "video" {
 			ffmpegCommand = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "/dev/video63")
 		} else if contentType[:len("image")] == "image" {
 			//TODO: make it so users can change the size
 			//set the size manually because it crashes reading from it if the size of the webcam is constantly changing
-			ffmpegCommand = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "-vcodec", "rawvideo", "-pix_fmt", "yuv420p", "/dev/video63")
-		} else {
-			dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You chose something that isn't an image or a video!")
-			dialog.Run()
-			dialog.Destroy()
-			return
+			ffmpegCommand = exec.Command("ffmpeg", "-loop", "true", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "-pix_fmt", "yuv420p", "/dev/video63")
 		}
 		ffmpegCommand.Stderr = os.Stderr
 		ffmpegCommand.Stdout = os.Stdout
