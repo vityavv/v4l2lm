@@ -28,7 +28,7 @@ Here are some things that happen that I don't want happening in the near future.
 
 - Everything is in 1024x768.
 	- Make it so that the user can customize the resolution
-	- Make it so that the user can change how the image is cropped/stretched to fill the resolution
+- The "Crop" method of fitting is massively fucked up and I don't know why
 - The program has to be run in the command line to enable v4l2loopback
 - Make releases/prebuilt binaries so users don't have to install all of the dependencies
 - Windows/Mac support (very far future unless someone else wants to do it haha)

@@ -12,6 +12,11 @@ import (
 	"net/http"
 )
 
+type Playing struct {
+	ContentType string
+	Filename    string
+}
+
 func main() {
 	//modprobe this bitch
 	//TODO check if video driver exists
@@ -27,6 +32,7 @@ func main() {
 	running := make(chan bool)
 	var stdin io.WriteCloser
 	var ffmpegCommand *exec.Cmd
+	var nowPlaying Playing
 
 	gtk.Init(nil)
 
@@ -53,8 +59,19 @@ func main() {
 	tl.SetMarkup("<big><b>V4L2 Loopback Manager</b></big>")
 	cfl, err := gtk.LabelNew("Choose a folder")
 	civl, err := gtk.LabelNew("Choose an image or a video to display")
+	sl, err := gtk.LabelNew("Settings")
+	fsl, err := gtk.LabelNew("Fit style: ")
 
 	fileChooserButton, err := gtk.FileChooserButtonNew("Choose a folder", gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
+
+	fitStyleComboBox, err := gtk.ComboBoxTextNew()
+	fitStyleComboBox.Append("Stretch", "Stretch")
+	fitStyleComboBox.Append("Crop", "Crop")
+	fitStyleComboBox.Append("Letterbox", "Letterbox")
+
+	fitStyleBox, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 10)
+	fitStyleBox.PackStart(fsl, false, false, 0)
+	fitStyleBox.PackStart(fitStyleComboBox, false, false, 0)
 
 	// no idea what much of this means, copied it from the examples in gotk
 	treeView, err := gtk.TreeViewNew()
@@ -65,6 +82,10 @@ func main() {
 
 	listStore, err := gtk.ListStoreNew(glib.TYPE_STRING)
 	treeView.SetModel(listStore)
+
+	scrolledWindow, err := gtk.ScrolledWindowNew(nil, nil)
+	scrolledWindow.Add(treeView)
+
 	selection, err := treeView.GetSelection()
 	selection.Connect("changed", func(sel *gtk.TreeSelection) {
 		//So much of this stuff seems unnecessary. Next time I should use something that isn't as complicated as gtk
@@ -104,15 +125,14 @@ func main() {
 			stdin.Write([]byte("q\n"))
 			<-running
 		}
-		if contentType[:len("video")] == "video" {
-			ffmpegCommand = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "/dev/video63")
-		} else if contentType[:len("image")] == "image" {
-			//TODO: make it so users can change the size
-			//set the size manually because it crashes reading from it if the size of the webcam is constantly changing
-			ffmpegCommand = exec.Command("ffmpeg", "-loop", "true", "-re", "-i", fileChooserButton.GetFilename()+"/"+videoFilename, "-f", "v4l2", "-s", "1024x768", "-pix_fmt", "yuv420p", "/dev/video63")
+		//Construct the two scaling arguments based on chosen fit style
+
+		fitStyle := fitStyleComboBox.GetActiveText()
+		nowPlaying = Playing{
+			ContentType: contentType,
+			Filename:    fileChooserButton.GetFilename() + "/" + videoFilename,
 		}
-		ffmpegCommand.Stderr = os.Stderr
-		ffmpegCommand.Stdout = os.Stdout
+		ffmpegCommand = createCommand(fitStyle, nowPlaying)
 		stdin, err = ffmpegCommand.StdinPipe()
 		if err != nil {
 			log.Fatal("error getting stdin: ", err)
@@ -123,9 +143,6 @@ func main() {
 		}()
 		started = true
 	})
-
-	scrolledWindow, err := gtk.ScrolledWindowNew(nil, nil)
-	scrolledWindow.Add(treeView)
 
 	fileChooserButton.Connect("file-set", func(fcb *gtk.FileChooserButton) {
 		listStore.Clear()
@@ -141,6 +158,24 @@ func main() {
 		}
 	})
 
+	fitStyleComboBox.Connect("changed", func(fscb *gtk.ComboBoxText) {
+		if !started {
+			return
+		}
+		stdin.Write([]byte("q\n"))
+		<-running
+		fitStyle := fitStyleComboBox.GetActiveText()
+		ffmpegCommand = createCommand(fitStyle, nowPlaying)
+		stdin, err = ffmpegCommand.StdinPipe()
+		if err != nil {
+			log.Fatal("Error getting stdin: ", err)
+		}
+		go func() {
+			ffmpegCommand.Run()
+			running <- false
+		}()
+	})
+
 	if err != nil {
 		log.Fatal("Unable to create object: ", err.Error())
 	}
@@ -150,8 +185,29 @@ func main() {
 	box.PackStart(fileChooserButton, false, false, 0)
 	box.PackStart(civl, false, false, 0)
 	box.PackStart(scrolledWindow, true, true, 0)
+	box.PackStart(sl, false, false, 0)
+	box.PackStart(fitStyleBox, false, false, 10)
 
 	win.SetDefaultSize(800, 600)
 	win.ShowAll()
 	gtk.Main()
+}
+
+func createCommand(fitStyle string, nowPlaying Playing) (command *exec.Cmd) {
+	arg1, arg2 := "-s", "1024x768"
+	if fitStyle == "Letterbox" {
+		arg1, arg2 = "-vf", "scale=1024:768:force_original_aspect_ratio=decrease,pad=1024:768:(ow-iw)/2:(oh-ih)/2"
+	} else if fitStyle == "Crop" {
+		arg1, arg2 = "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
+	}
+	if nowPlaying.ContentType[:len("video")] == "video" {
+		command = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", nowPlaying.Filename, "-f", "v4l2", arg1, arg2, "-pix_fmt", "yuv420p", "/dev/video63")
+	} else if nowPlaying.ContentType[:len("image")] == "image" {
+		//TODO: make it so users can change the size
+		//set the size manually because it crashes reading from it if the size of the webcam is constantly changing
+		command = exec.Command("ffmpeg", "-loop", "true", "-re", "-i", nowPlaying.Filename, "-f", "v4l2", arg1, arg2, "-pix_fmt", "yuv420p", "/dev/video63")
+	}
+	command.Stderr = os.Stderr
+	command.Stdout = os.Stdout
+	return
 }
