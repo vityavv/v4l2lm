@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
+	"github.com/mattn/go-isatty"
 	"io"
 	"io/ioutil"
 	"log"
@@ -20,13 +22,21 @@ type Playing struct {
 
 func main() {
 	//modprobe this bitch
-	//TODO check if video driver exists
-	v4l2Enable := exec.Command("sudo", "-S", "modprobe", "v4l2loopback", "video_nr=63", "card_label=\"V4L2LM Virtual Camera\"")
-	v4l2Enable.Stderr = os.Stderr
-	v4l2Enable.Stdin = os.Stdin
-	err := v4l2Enable.Run()
-	if err != nil {
-		log.Fatal("Error starting v4l2loopback: ", err.Error())
+	errorOnStart := false
+	lstat, err := os.Stat("/dev/video63")
+	if err != nil || lstat.Mode()&os.ModeDevice == 0 {
+		if isatty.IsTerminal(os.Stdout.Fd()) {
+			fmt.Println("You may see a prompt for a password. This is to enable v4l2loopback, and only has to be done once every time you restart. You may enable v4l2loopback yourself with the command sudo modprobe v4l2loopback video_nr=63 card_label=\"V4L2LM Virtual Camera\"")
+			v4l2Enable := exec.Command("sudo", "-S", "modprobe", "v4l2loopback", "video_nr=63", "card_label=\"V4L2LM Virtual Camera\"")
+			v4l2Enable.Stderr = os.Stderr
+			v4l2Enable.Stdin = os.Stdin
+			err = v4l2Enable.Run()
+			if err != nil {
+				log.Fatal("Error starting v4l2loopback: ", err.Error())
+			}
+		} else {
+			errorOnStart = true
+		}
 	}
 
 	started := false
@@ -51,6 +61,11 @@ func main() {
 		}
 		gtk.MainQuit()
 	})
+
+	if errorOnStart {
+		errorWithText("V4L2Loopback device on /dev/video63 not detected. Run this program inside of a terminal to enable it, or enable it yourself with the command sudo modprobe v4l2loopback video_nr=63 card_label=\"V4L2LM Virtual Camera\"", win)
+		return
+	}
 
 	box, err := gtk.BoxNew(gtk.ORIENTATION_VERTICAL, 10)
 	if err != nil {
