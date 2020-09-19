@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	//To check content type
 	"net/http"
 )
@@ -33,6 +34,8 @@ func main() {
 	var stdin io.WriteCloser
 	var ffmpegCommand *exec.Cmd
 	var nowPlaying Playing
+	width, height := 1024, 768
+	fitStyle := "Stretch"
 
 	gtk.Init(nil)
 
@@ -61,6 +64,8 @@ func main() {
 	civl, err := gtk.LabelNew("Choose an image or a video to display")
 	sl, err := gtk.LabelNew("Settings")
 	fsl, err := gtk.LabelNew("Fit style: ")
+	rl, err := gtk.LabelNew("Resolution: ")
+	xl, err := gtk.LabelNew("x")
 
 	fileChooserButton, err := gtk.FileChooserButtonNew("Choose a folder", gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER)
 
@@ -68,10 +73,24 @@ func main() {
 	fitStyleComboBox.Append("Stretch", "Stretch")
 	fitStyleComboBox.Append("Crop", "Crop")
 	fitStyleComboBox.Append("Letterbox", "Letterbox")
+	fitStyleComboBox.SetActive(0)
 
-	fitStyleBox, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 10)
-	fitStyleBox.PackStart(fsl, false, false, 0)
-	fitStyleBox.PackStart(fitStyleComboBox, false, false, 0)
+	widthEntry, err := gtk.EntryNew()
+	widthEntry.SetInputPurpose(gtk.INPUT_PURPOSE_DIGITS)
+	widthEntry.SetText("1024")
+	heightEntry, err := gtk.EntryNew()
+	heightEntry.SetInputPurpose(gtk.INPUT_PURPOSE_DIGITS)
+	heightEntry.SetText("768")
+	setResButton, err := gtk.ButtonNewWithLabel("Set Resolution")
+
+	settingsBox, err := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 10)
+	settingsBox.PackStart(fsl, false, false, 0)
+	settingsBox.PackStart(fitStyleComboBox, false, false, 0)
+	settingsBox.PackStart(rl, false, false, 0)
+	settingsBox.PackStart(widthEntry, false, false, 0)
+	settingsBox.PackStart(xl, false, false, 0)
+	settingsBox.PackStart(heightEntry, false, false, 0)
+	settingsBox.PackStart(setResButton, false, false, 0)
 
 	// no idea what much of this means, copied it from the examples in gotk
 	treeView, err := gtk.TreeViewNew()
@@ -116,9 +135,7 @@ func main() {
 		contentType := http.DetectContentType(fileContents)
 		//Stop current command
 		if contentType[:len("video")] != "video" && contentType[:len("image")] != "image" {
-			dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, "You chose something that isn't an image or a video!")
-			dialog.Run()
-			dialog.Destroy()
+			errorWithText("You chose something that isn't an image or a video!", win)
 			return
 		}
 		if started {
@@ -127,12 +144,11 @@ func main() {
 		}
 		//Construct the two scaling arguments based on chosen fit style
 
-		fitStyle := fitStyleComboBox.GetActiveText()
 		nowPlaying = Playing{
 			ContentType: contentType,
 			Filename:    fileChooserButton.GetFilename() + "/" + videoFilename,
 		}
-		ffmpegCommand = createCommand(fitStyle, nowPlaying)
+		ffmpegCommand = createCommand(fitStyle, nowPlaying, width, height)
 		stdin, err = ffmpegCommand.StdinPipe()
 		if err != nil {
 			log.Fatal("error getting stdin: ", err)
@@ -164,8 +180,8 @@ func main() {
 		}
 		stdin.Write([]byte("q\n"))
 		<-running
-		fitStyle := fitStyleComboBox.GetActiveText()
-		ffmpegCommand = createCommand(fitStyle, nowPlaying)
+		fitStyle = fitStyleComboBox.GetActiveText()
+		ffmpegCommand = createCommand(fitStyle, nowPlaying, width, height)
 		stdin, err = ffmpegCommand.StdinPipe()
 		if err != nil {
 			log.Fatal("Error getting stdin: ", err)
@@ -174,6 +190,49 @@ func main() {
 			ffmpegCommand.Run()
 			running <- false
 		}()
+	})
+
+	setResButton.Connect("clicked", func(_ *gtk.Button) {
+		if started {
+			dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_WARNING, gtk.BUTTONS_OK_CANCEL, "Changing the resolution while the program is running may result in some issues. You may need to stop webcam capture before changing it. Would you like to continue?")
+			response := dialog.Run()
+			dialog.Destroy()
+			if response != gtk.RESPONSE_OK {
+				return
+			}
+		}
+		widthText, err := widthEntry.GetText()
+		heightText, err := heightEntry.GetText()
+		if err != nil {
+			log.Fatal("Error getting text from entries")
+		}
+		newWidth, err := strconv.Atoi(widthText)
+		if err != nil || newWidth < 1 {
+			errorWithText("The width \""+widthText+"\" is not a valid number!", win)
+			return
+		}
+		newHeight, err := strconv.Atoi(heightText)
+		if err != nil || newHeight < 1 {
+			errorWithText("The height \""+heightText+"\" is not a valid number!", win)
+			return
+		}
+		if newWidth == width && newHeight == height {
+			return
+		}
+		width, height = newWidth, newHeight
+		if started {
+			stdin.Write([]byte("q\n"))
+			<-running
+			ffmpegCommand = createCommand(fitStyle, nowPlaying, width, height)
+			stdin, err = ffmpegCommand.StdinPipe()
+			if err != nil {
+				log.Fatal("Error getting stdin: ", err)
+			}
+			go func() {
+				ffmpegCommand.Run()
+				running <- false
+			}()
+		}
 	})
 
 	if err != nil {
@@ -186,19 +245,20 @@ func main() {
 	box.PackStart(civl, false, false, 0)
 	box.PackStart(scrolledWindow, true, true, 0)
 	box.PackStart(sl, false, false, 0)
-	box.PackStart(fitStyleBox, false, false, 10)
+	box.PackStart(settingsBox, false, false, 10)
 
 	win.SetDefaultSize(800, 600)
 	win.ShowAll()
 	gtk.Main()
 }
 
-func createCommand(fitStyle string, nowPlaying Playing) (command *exec.Cmd) {
-	arg1, arg2 := "-s", "1024x768"
+func createCommand(fitStyle string, nowPlaying Playing, iwidth, iheight int) (command *exec.Cmd) {
+	width, height := strconv.Itoa(iwidth), strconv.Itoa(iheight)
+	arg1, arg2 := "-s", width+"x"+height
 	if fitStyle == "Letterbox" {
-		arg1, arg2 = "-vf", "scale=1024:768:force_original_aspect_ratio=decrease,pad=1024:768:(ow-iw)/2:(oh-ih)/2"
+		arg1, arg2 = "-vf", "scale="+width+":"+height+":force_original_aspect_ratio=decrease,pad=1024:768:(ow-iw)/2:(oh-ih)/2"
 	} else if fitStyle == "Crop" {
-		arg1, arg2 = "-vf", "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720"
+		arg1, arg2 = "-vf", "scale="+width+":"+height+":force_original_aspect_ratio=increase,crop=1280:720"
 	}
 	if nowPlaying.ContentType[:len("video")] == "video" {
 		command = exec.Command("ffmpeg", "-stream_loop", "-1", "-re", "-i", nowPlaying.Filename, "-f", "v4l2", arg1, arg2, "-pix_fmt", "yuv420p", "/dev/video63")
@@ -210,4 +270,10 @@ func createCommand(fitStyle string, nowPlaying Playing) (command *exec.Cmd) {
 	command.Stderr = os.Stderr
 	command.Stdout = os.Stdout
 	return
+}
+
+func errorWithText(text string, win gtk.IWindow) {
+	dialog := gtk.MessageDialogNew(win, gtk.DIALOG_DESTROY_WITH_PARENT, gtk.MESSAGE_ERROR, gtk.BUTTONS_OK, text)
+	dialog.Run()
+	dialog.Destroy()
 }
